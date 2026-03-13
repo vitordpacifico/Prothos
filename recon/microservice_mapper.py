@@ -207,13 +207,11 @@ async def _map_async(
     methods = methods or ["GET"]
     sem     = asyncio.Semaphore(concurrency)
 
-    proxies = {"http://": proxy, "https://": proxy} if proxy else None
-
     async with httpx.AsyncClient(
         verify=False,
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; Prothos/1.0)"},
-        proxies=proxies,
+        proxy=proxy,
     ) as client:
 
         tasks = [

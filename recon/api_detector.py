@@ -152,7 +152,6 @@ async def _find_js_async(
 ) -> JSDiscoveryReport:
 
     report  = JSDiscoveryReport(target=target)
-    proxies = {"http://": proxy, "https://": proxy} if proxy else None
 
     async with httpx.AsyncClient(
         verify=False,
@@ -161,7 +160,7 @@ async def _find_js_async(
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                           "AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
         },
-        proxies=proxies,
+        proxy=proxy,
     ) as client:
 
         try:

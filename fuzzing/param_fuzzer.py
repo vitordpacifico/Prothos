@@ -326,7 +326,6 @@ async def _fuzz_async(
 ) -> FuzzReport:
 
     report  = FuzzReport(url=url, params_tested=params)
-    proxies = {"http://": proxy, "https://": proxy} if proxy else None
     sem     = asyncio.Semaphore(concurrency)
 
     active_payloads = {k: v for k, v in PAYLOADS.items() if k in categories}
@@ -341,7 +340,7 @@ async def _fuzz_async(
         verify=False,
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; Prothos/1.0)"},
-        proxies=proxies,
+        proxy=proxy,
     ) as client:
 
         with Progress(

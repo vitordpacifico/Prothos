@@ -193,7 +193,6 @@ async def _js_scan_async(
 ) -> JSScanReport:
 
     report  = JSScanReport(target=target)
-    proxies = {"http://": proxy, "https://": proxy} if proxy else None
 
     async with httpx.AsyncClient(
         verify=False,
@@ -203,7 +202,7 @@ async def _js_scan_async(
                           "AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         },
-        proxies=proxies,
+        proxy=proxy,
     ) as client:
 
         try:

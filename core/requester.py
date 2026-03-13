@@ -106,13 +106,12 @@ class Requester:
         await self.close()
 
     async def start(self):
-        proxies = {"http://": self.proxy, "https://": self.proxy} if self.proxy else None
 
         self._client = httpx.AsyncClient(
             verify=self.verify_ssl,
             follow_redirects=self.follow_redirects,
             timeout=httpx.Timeout(self.timeout),
-            proxies=proxies,
+            proxy=self.proxy,
             cookies=self.extra_cookies,
             headers={
                 "User-Agent": USER_AGENTS[0],

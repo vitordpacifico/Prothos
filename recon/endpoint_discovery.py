@@ -229,14 +229,13 @@ async def _discover_async(
 ) -> DiscoveryReport:
 
     report  = DiscoveryReport(target=target)
-    proxies = {"http://": proxy, "https://": proxy} if proxy else None
     sem     = asyncio.Semaphore(concurrency)
 
     async with httpx.AsyncClient(
         verify=False,
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; Prothos/1.0)"},
-        proxies=proxies,
+        proxy=proxy,
     ) as client:
 
         console.print("[dim]    Calibrating baselines...[/dim]")
@@ -338,7 +337,7 @@ def _display_summary(report: DiscoveryReport):
 
 def run_endpoint_discovery(
     target:        str,
-    wordlist_path: str         = "wordlists/endpoints.txt",
+    wordlist_path: str         = "wordlist/endpoints.txt",
     concurrency:   int         = 50,
     proxy:         Optional[str] = None,
     save_json:     Optional[str] = None,

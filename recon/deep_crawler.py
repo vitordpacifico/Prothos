@@ -299,7 +299,7 @@ async def _crawl_async(
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         },
-        proxies=proxies,
+        proxy=proxy,
     ) as client:
 
         with Progress(

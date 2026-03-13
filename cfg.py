@@ -5,7 +5,7 @@ from typing import Optional
 from datetime import datetime
 
 BASE_DIR      = Path(__file__).resolve().parent
-WORDLIST_DIR  = BASE_DIR / "wordlists"
+WORDLIST_DIR  = BASE_DIR / "wordlist"
 OUTPUT_DIR    = BASE_DIR / "output"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -44,7 +44,6 @@ class ProthosConfig:
         self.output_html = self.output_dir / f"report_{ts}.html"
 
     def validate(self):
-        """Valida campos críticos antes de iniciar qualquer módulo."""
         if not self.target:
             raise ValueError("[config] 'target' is required.")
         if self.concurrency < 1 or self.concurrency > 500:
@@ -58,7 +57,6 @@ class ProthosConfig:
 config = ProthosConfig()
 
 def load_from_env():
-    """Sobrescreve config com variáveis de ambiente, se definidas."""
     if t := os.getenv("PROTHOS_TARGET"):
         config.target = t
     if c := os.getenv("PROTHOS_CONCURRENCY"):

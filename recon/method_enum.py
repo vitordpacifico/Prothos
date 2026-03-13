@@ -191,13 +191,12 @@ async def _enum_async(
 
     report  = MethodEnumReport(url=url)
     sem     = asyncio.Semaphore(concurrency)
-    proxies = {"http://": proxy, "https://": proxy} if proxy else None
-
+    
     async with httpx.AsyncClient(
         verify=False,
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; Prothos/1.0)"},
-        proxies=proxies,
+        proxy=proxy,
     ) as client:
 
         tasks   = [_test_method(client, url, m, sem) for m in methods]
