@@ -14,7 +14,6 @@ def load_wordlist(
     max_length: int = 253,
     encoding: str = "utf-8",
 ) -> list[str]:
-    
     path = Path(path)
 
     if not path.exists():
