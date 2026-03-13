@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual Environment
+venv/
+.venv/
+
+# Environment variables
+.env
+
+# Wordlists
+microservices.txt
+endpoints.txt
