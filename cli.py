@@ -3,6 +3,9 @@ import inspect
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.columns import Columns
 
 from utils.banner import show_banner
 from core.module_loader import autodiscover
@@ -29,7 +32,7 @@ CATEGORY_LABEL = {
     "enumeration": "ENUMERATION",
     "vulnscan":    "VULN SCAN",
     "evasion":     "EVASION",
-    "postex":      "POST-EX (audit)",
+    "postex":      "POST-EX",
 }
 
 CATEGORY_ORDER = ["recon", "enumeration", "vulnscan", "evasion", "postex"]
@@ -58,13 +61,13 @@ def _safe_call(fn, primary, **kwargs):
         try:
             return fn(primary)
         except Exception as e:
-            console.print(f"{R}[!] Module call failed: {e}{RESET}")
+            console.print(f"[red][!] Module call failed: {e}[/red]")
             return None
     except KeyboardInterrupt:
-        console.print(f"{Y}[!] Module interrupted.{RESET}")
+        console.print("[yellow][!] Module interrupted.[/yellow]")
         return None
     except Exception as e:
-        console.print(f"{R}[!] Module error: {e}{RESET}")
+        console.print(f"[red][!] Module error: {e}[/red]")
         return None
 
 
@@ -115,33 +118,34 @@ def _ensure_session(target: str) -> Session:
 
 def _prompt(label: str) -> str:
     try:
-        return input(f"{G}{label}{RESET}").strip()
+        console.print(label, end="")
+        return input().strip()
     except (KeyboardInterrupt, EOFError):
         return ""
 
 
-def _prompt_target(label: str = "Target URL > ") -> str:
+def _prompt_target(label: str = "[green]target >[/green] ") -> str:
     while True:
         t = _prompt(label)
-        if t:
+        if t and not t.lower().startswith(("c:", "(.venv", "python ", "module")):
             return t
-        console.print(f"{R}[!] Target cannot be empty.{RESET}")
+        console.print("[red][!] Informe uma URL/host valido (ex: https://alvo.com)[/red]")
 
 
 def _run_module(info, target: str):
     primary = _hostname(target) if info.name in DOMAIN_ARG else target
-    console.print(f"\n{C}[*] Running {info.category}/{info.name}{RESET}")
+    console.print(f"\n[cyan][*] Running {info.category}/{info.name}[/cyan]")
     report = _safe_call(info.fn, primary, proxy=get_session().proxy if get_session() else None)
     sess = _ensure_session(target)
     n = _ingest(sess, info.name, info.category, report)
     if n:
-        console.print(f"{DIM}    [+] {n} finding(s) added to session {sess.id}{RESET}")
+        console.print(f"[dim]    [+] {n} finding(s) added to session {sess.id}[/dim]")
 
 
 def _submenu_subdomain(loader, target: str):
     domain = _hostname(target)
-    console.print(f"\n{W}Subdomain:{RESET} [1] Bruteforce  [2] Passive  [3] Engine (both)")
-    choice = _prompt("subdomain> ")
+    console.print("\n[bold white]Subdomain:[/bold white] [1] Bruteforce  [2] Passive  [3] Engine (both)")
+    choice = _prompt("[green]subdomain >[/green] ")
     sess = _ensure_session(target)
     if choice == "1" and loader.get("subdomain_bruteforce"):
         _ingest(sess, "subdomain_bruteforce", "recon",
@@ -156,24 +160,24 @@ def _submenu_subdomain(loader, target: str):
             if fn:
                 _ingest(sess, "subbrute_engine", "recon", _safe_call(fn, domain, proxy=sess.proxy))
             else:
-                console.print(f"{R}[!] No run_* entry in subbrute_engine{RESET}")
+                console.print("[red][!] No run_* entry in subbrute_engine[/red]")
         except ImportError:
-            console.print(f"{R}[!] subbrute_engine not available{RESET}")
+            console.print("[red][!] subbrute_engine not available[/red]")
     else:
-        console.print(f"{R}[!] Invalid option.{RESET}")
+        console.print("[red][!] Opcao invalida.[/red]")
 
 
 def _submenu_kw(loader, target: str, name: str, category: str, label: str, options: dict):
     info = loader.get(name)
     if not info:
-        console.print(f"{R}[!] {name} not available.{RESET}")
+        console.print(f"[red][!] {name} not available.[/red]")
         return
-    console.print(f"\n{W}{label}{RESET}")
+    console.print(f"\n[bold white]{label}[/bold white]")
     for k, (desc, _) in options.items():
-        console.print(f"  [{k}] {desc}")
-    choice = _prompt(f"{name}> ")
+        console.print(f"  [bold white][{k}][/bold white] {desc}")
+    choice = _prompt(f"[green]{name} >[/green] ")
     if choice not in options:
-        console.print(f"{R}[!] Invalid option.{RESET}")
+        console.print("[red][!] Opcao invalida.[/red]")
         return
     _, kwargs = options[choice]
     primary = _hostname(target) if name in DOMAIN_ARG else target
@@ -183,45 +187,67 @@ def _submenu_kw(loader, target: str, name: str, category: str, label: str, optio
     _ingest(sess, name, category, _safe_call(info.fn, primary, proxy=sess.proxy, **kwargs))
 
 
+def _render_modules(loader) -> list:
+    entries = []
+    tables = []
+    idx = 1
+    for cat in CATEGORY_ORDER:
+        mods = sorted(loader.get_by_category(cat), key=lambda x: x.name)
+        if not mods:
+            continue
+        t = Table(title=CATEGORY_LABEL.get(cat, cat.upper()), title_style="bold red",
+                  show_header=False, box=None, padding=(0, 1, 0, 0))
+        t.add_column(justify="right", style="bold red", no_wrap=True)
+        t.add_column(style="white", no_wrap=True)
+        for m in mods:
+            entries.append(m)
+            t.add_row(str(idx), m.name)
+            idx += 1
+        tables.append(t)
+
+    console.print(Columns(tables, padding=(0, 3), expand=False))
+    console.print(
+        "  [bold white]P[/bold white] param_fuzzer    "
+        "[bold white]E[/bold white] method_enum    "
+        "[bold white]A[/bold white] run all    "
+        "[bold white]L[/bold white] list again    "
+        "[dim]0 back[/dim]"
+    )
+    return entries
+
+
 def _menu_scan(loader, target: str):
+    console.print(Panel(f"[bold white]{target}[/bold white]",
+                        title="[bold red]Modules[/bold red]", border_style="red", expand=False))
+    entries = _render_modules(loader)
+
     while True:
-        console.print(f"\n{W}=== MODULES ==={RESET}  {DIM}target: {target}{RESET}")
-        entries = []
-        idx = 1
-        for cat in CATEGORY_ORDER:
-            mods = loader.get_by_category(cat)
-            if not mods:
-                continue
-            console.print(f"\n{R}[ {CATEGORY_LABEL.get(cat, cat.upper())} ]{RESET}")
-            for m in sorted(mods, key=lambda x: x.name):
-                entries.append(m)
-                console.print(f"  {W}[{idx}]{RESET} {m.name}")
-                idx += 1
+        choice = _prompt("[green]module >[/green] ").lower()
 
-        console.print(f"\n{R}[ FUZZING ]{RESET}")
-        console.print(f"  {W}[P]{RESET} param_fuzzer    {W}[E]{RESET} method_enum")
-        console.print(f"\n  {W}[A]{RESET} Run All (recon + enum + vulnscan)    {DIM}[0] Back{RESET}")
-
-        choice = _prompt("module> ").lower()
         if choice == "0":
             return
+        elif choice in ("l", "list"):
+            entries = _render_modules(loader)
+            continue
+        elif choice == "":
+            continue
         elif choice == "a":
             _run_all(loader, target)
         elif choice == "p":
-            params = [p.strip() for p in _prompt("Params (comma separated) > ").split(",") if p.strip()]
+            params = [p.strip() for p in _prompt("[green]params (comma) >[/green] ").split(",") if p.strip()]
             try:
                 from fuzzing.param_fuzzer import fuzz_params
                 sess = _ensure_session(target)
                 _ingest(sess, "param_fuzzer", "fuzzing", fuzz_params(target, params, proxy=sess.proxy))
             except Exception as e:
-                console.print(f"{R}[!] {e}{RESET}")
+                console.print(f"[red][!] {e}[/red]")
         elif choice == "e":
             try:
                 from fuzzing.method_enum import enum_methods
                 sess = _ensure_session(target)
                 _ingest(sess, "method_enum", "fuzzing", enum_methods(target, proxy=sess.proxy))
             except Exception as e:
-                console.print(f"{R}[!] {e}{RESET}")
+                console.print(f"[red][!] {e}[/red]")
         elif choice.isdigit() and 1 <= int(choice) <= len(entries):
             info = entries[int(choice) - 1]
             if info.name == "social_recon":
@@ -237,7 +263,7 @@ def _menu_scan(loader, target: str):
             elif info.name == "cloud_enum":
                 _submenu_kw(loader, target, "cloud_enum", "recon", "Cloud Enum:",
                             {"1": ("Auto-detect", {}),
-                             "2": ("Custom names", lambda: {"names": [n.strip() for n in _prompt("Names (comma) > ").split(",") if n.strip()]})})
+                             "2": ("Custom names", lambda: {"names": [n.strip() for n in _prompt("[green]names (comma) >[/green] ").split(",") if n.strip()]})})
             elif info.name == "email_harvester":
                 _submenu_kw(loader, target, "email_harvester", "recon", "Email Harvester:",
                             {"1": ("Harvest only", {}),
@@ -246,49 +272,54 @@ def _menu_scan(loader, target: str):
             else:
                 _run_module(info, target)
         else:
-            console.print(f"{R}[!] Invalid option.{RESET}")
+            console.print("[red][!] Opcao invalida.[/red] [dim](numero do modulo, ou L=listar, 0=voltar)[/dim]")
+            continue
+
+        console.print("\n[dim]--- escolha outro modulo (L lista de novo, 0 volta) ---[/dim]")
 
 
 def _run_all(loader, target: str):
-    console.print(f"\n{Y}[*] Full pipeline on {W}{target}{RESET}")
+    console.print(f"\n[yellow][*] Full pipeline on [bold white]{target}[/bold white][/yellow]")
     sess = _ensure_session(target)
     for cat in ("recon", "enumeration", "vulnscan"):
         for m in sorted(loader.get_by_category(cat), key=lambda x: x.name):
             primary = _hostname(target) if m.name in DOMAIN_ARG else target
-            console.print(f"{C}[>] {m.category}/{m.name}{RESET}")
+            console.print(f"[cyan][>] {m.category}/{m.name}[/cyan]")
             report = _safe_call(m.fn, primary, proxy=sess.proxy)
             _ingest(sess, m.name, m.category, report)
-    console.print(f"\n{G}[OK] Pipeline complete — {len(sess.findings)} findings in session {sess.id}{RESET}")
+    console.print(f"\n[green][OK] Pipeline complete — {len(sess.findings)} findings in session {sess.id}[/green]")
 
 
 def _menu_oob():
-    console.print(f"\n{W}=== OOB / CONFIRMATION ==={RESET}")
-    console.print(f"  {W}[1]{RESET} HTTP logger   {W}[2]{RESET} DNS logger   {W}[3]{RESET} Interactsh   {DIM}[0] Back{RESET}")
-    choice = _prompt("oob> ")
+    console.print(Panel("[bold white][1][/bold white] HTTP logger    "
+                        "[bold white][2][/bold white] DNS logger    "
+                        "[bold white][3][/bold white] Interactsh    [dim]0 back[/dim]",
+                        title="[bold red]OOB / Confirmation[/bold red]", border_style="red", expand=False))
+    choice = _prompt("[green]oob >[/green] ")
     if choice == "1":
         from c2.http_log import run_http_log
-        port = _prompt("Port [8080] > ") or "8080"
-        dur = _prompt("Duration s [120] > ") or "120"
+        port = _prompt("[green]port [8080] >[/green] ") or "8080"
+        dur = _prompt("[green]duration s [120] >[/green] ") or "120"
         run_http_log(port=int(port), duration=int(dur))
     elif choice == "2":
         from c2.dns_log import run_dns_log
-        domain = _prompt_target("OOB domain > ")
-        port = _prompt("UDP port [5353] > ") or "5353"
-        dur = _prompt("Duration s [120] > ") or "120"
+        domain = _prompt_target("[green]OOB domain >[/green] ")
+        port = _prompt("[green]UDP port [5353] >[/green] ") or "5353"
+        dur = _prompt("[green]duration s [120] >[/green] ") or "120"
         run_dns_log(domain, listen_port=int(port), duration=int(dur))
     elif choice == "3":
         from c2.interactsh_client import run_interactsh_client
-        dur = _prompt("Duration s [120] > ") or "120"
+        dur = _prompt("[green]duration s [120] >[/green] ") or "120"
         run_interactsh_client(duration=int(dur))
 
 
 def _menu_tools():
-    console.print(f"\n{W}=== TOOLS ==={RESET}")
-    console.print(f"  {W}[1]{RESET} Encoder (payload)   {DIM}[0] Back{RESET}")
-    choice = _prompt("tools> ")
+    console.print(Panel("[bold white][1][/bold white] Encoder (payload)    [dim]0 back[/dim]",
+                        title="[bold red]Tools[/bold red]", border_style="red", expand=False))
+    choice = _prompt("[green]tools >[/green] ")
     if choice == "1":
         from evasion.encoder import run_encoder
-        payload = _prompt("Payload > ")
+        payload = _prompt("[green]payload >[/green] ")
         if payload:
             run_encoder(payload)
 
@@ -296,13 +327,16 @@ def _menu_tools():
 def _menu_output():
     sess = get_session()
     if sess is None or not sess.findings:
-        console.print(f"{Y}[!] No session findings yet. Run modules first.{RESET}")
+        console.print("[yellow][!] Nenhum finding na sessao ainda. Rode modulos primeiro.[/yellow]")
         return
     sess.finish()
-    console.print(f"\n{W}=== OUTPUT ==={RESET}  {DIM}{len(sess.findings)} findings{RESET}")
-    console.print(f"  {W}[1]{RESET} JSON  {W}[2]{RESET} HTML  {W}[3]{RESET} Markdown  "
-                  f"{W}[4]{RESET} PDF  {W}[5]{RESET} SARIF  {W}[6]{RESET} Burp XML   {DIM}[0] Back{RESET}")
-    choice = _prompt("output> ")
+    console.print(Panel(
+        "[bold white][1][/bold white] JSON   [bold white][2][/bold white] HTML   "
+        "[bold white][3][/bold white] Markdown   [bold white][4][/bold white] PDF   "
+        "[bold white][5][/bold white] SARIF   [bold white][6][/bold white] Burp XML   [dim]0 back[/dim]",
+        title=f"[bold red]Output[/bold red]  [dim]{len(sess.findings)} findings[/dim]",
+        border_style="red", expand=False))
+    choice = _prompt("[green]output >[/green] ")
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     base = f"output/session_{ts}"
     try:
@@ -318,7 +352,7 @@ def _menu_output():
             run_markdown_report(sess, f"{base}.md")
         elif choice == "4":
             from output.pdf_report import run_pdf_report
-            run_pdf_report(sess, f"{base}.pdf", tester=_prompt("Tester > ") or "Prothos")
+            run_pdf_report(sess, f"{base}.pdf", tester=_prompt("[green]tester >[/green] ") or "Prothos")
         elif choice == "5":
             from output.sarif_export import run_sarif_export
             run_sarif_export(sess, f"{base}.sarif")
@@ -326,32 +360,33 @@ def _menu_output():
             from integrations.burp_export import run_burp_export
             run_burp_export(sess, f"{base}.xml")
     except Exception as e:
-        console.print(f"{R}[!] Export failed: {e}{RESET}")
+        console.print(f"[red][!] Export failed: {e}[/red]")
 
 
 def _menu_session():
-    console.print(f"\n{W}=== SESSION ==={RESET}")
-    console.print(f"  {W}[1]{RESET} Show  {W}[2]{RESET} Save  {W}[3]{RESET} Load   {DIM}[0] Back{RESET}")
-    choice = _prompt("session> ")
+    console.print(Panel("[bold white][1][/bold white] Show   [bold white][2][/bold white] Save   "
+                        "[bold white][3][/bold white] Load   [dim]0 back[/dim]",
+                        title="[bold red]Session[/bold red]", border_style="red", expand=False))
+    choice = _prompt("[green]session >[/green] ")
     sess = get_session()
     if choice == "1":
         if sess:
             console.print(sess.summary())
         else:
-            console.print(f"{Y}[!] No active session.{RESET}")
+            console.print("[yellow][!] Nenhuma sessao ativa.[/yellow]")
     elif choice == "2":
         if not sess:
-            console.print(f"{Y}[!] No active session.{RESET}")
+            console.print("[yellow][!] Nenhuma sessao ativa.[/yellow]")
             return
-        path = _prompt("Save path [output/session.json] > ") or "output/session.json"
+        path = _prompt("[green]save path [output/session.json] >[/green] ") or "output/session.json"
         try:
             from output.json_exporter import export_json
             sess.finish()
             export_json(sess.to_dict(), path)
         except Exception as e:
-            console.print(f"{R}[!] {e}{RESET}")
+            console.print(f"[red][!] {e}[/red]")
     elif choice == "3":
-        path = _prompt("Load path > ")
+        path = _prompt("[green]load path >[/green] ")
         if not path:
             return
         try:
@@ -368,41 +403,46 @@ def _menu_session():
                              description=str(f.get("description", "")),
                              url=f.get("url"), param=f.get("param"), payload=f.get("payload"),
                              evidence=str(f.get("evidence", "")), cve=f.get("cve"))
-            console.print(f"{G}[OK] Loaded {len(sess.findings)} findings for {target}{RESET}")
+            console.print(f"[green][OK] Loaded {len(sess.findings)} findings for {target}[/green]")
         except Exception as e:
-            console.print(f"{R}[!] Load failed: {e}{RESET}")
+            console.print(f"[red][!] Load failed: {e}[/red]")
 
 
-MAIN_MENU = f"""
-  {W}[1]{RESET} Scan Modules        {DIM}recon / enum / vulnscan / evasion / postex{RESET}
-  {W}[2]{RESET} OOB / Confirmation  {DIM}http / dns / interactsh listeners{RESET}
-  {W}[3]{RESET} Tools               {DIM}encoder{RESET}
-  {W}[4]{RESET} Output              {DIM}json / html / markdown / pdf / sarif / burp{RESET}
-  {W}[5]{RESET} Session             {DIM}show / save / load{RESET}
-  {DIM}[0] Exit{RESET}
-"""
+def _main_menu(target):
+    rows = [
+        ("1", "Scan Modules", "recon / enum / vulnscan / evasion / postex"),
+        ("2", "OOB / Confirm", "http / dns / interactsh listeners"),
+        ("3", "Tools", "encoder"),
+        ("4", "Output", "json / html / markdown / pdf / sarif / burp"),
+        ("5", "Session", "show / save / load"),
+        ("T", "Set target", "trocar o alvo ativo"),
+        ("0", "Exit", ""),
+    ]
+    t = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    t.add_column(style="bold red", justify="right")
+    t.add_column(style="bold white")
+    t.add_column(style="dim")
+    for k, name, desc in rows:
+        t.add_row(k, name, desc)
+    subtitle = f"[dim]target: {target}[/dim]" if target else "[dim]no target set[/dim]"
+    console.print(Panel(t, title="[bold red]PROTHOS[/bold red]", subtitle=subtitle,
+                        border_style="red", expand=False))
 
 
 def start_cli():
     show_banner()
     loader = autodiscover()
     summary = loader.summary()
-    console.print(f"{DIM}    Loaded {summary['total']} modules: "
-                  f"{', '.join(f'{k}={v}' for k, v in summary['categories'].items())}{RESET}")
+    console.print(f"[dim]    Loaded {summary['total']} modules: "
+                  f"{', '.join(f'{k}={v}' for k, v in summary['categories'].items())}[/dim]")
 
     target = None
     while True:
-        console.print(MAIN_MENU)
-        if target:
-            console.print(f"{DIM}  active target: {target}{RESET}")
-        try:
-            option = input(f"{W}prothos{R}>{RESET} ").strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            console.print(f"\n{R}[!] Exiting Prothos...{RESET}")
-            sys.exit(0)
+        _main_menu(target)
+        option = _prompt("[bold white]prothos[/bold white][red]>[/red] ").lower()
 
         if option == "0":
-            console.print(f"\n{DIM}Exiting Prothos...{RESET}\n")
+            console.print("\n[dim]Exiting Prothos...[/dim]\n")
             break
         elif option == "1":
             target = target or _prompt_target()
@@ -419,5 +459,7 @@ def start_cli():
         elif option in ("t", "target"):
             target = _prompt_target()
             _ensure_session(target)
+        elif option == "":
+            continue
         else:
-            console.print(f"{R}[!] Invalid option '{option}'.{RESET}")
+            console.print(f"[red][!] Opcao invalida '{option}'.[/red]")
