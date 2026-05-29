@@ -406,7 +406,7 @@ def run_tech_fingerprint(
             timeout=timeout,
             verify=False,
             allow_redirects=True,
-            proxy=proxy,
+            proxies=proxies,
             headers={"User-Agent": user_agent},
         )
     except RequestException as e:
