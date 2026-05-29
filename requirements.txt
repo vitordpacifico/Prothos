@@ -1,7 +1,11 @@
+httpx[http2]
 aiohttp
 beautifulsoup4
 lxml
 rich
 requests
-httpx
 dnspython
+mmh3
+reportlab
+cryptography
+msgpack
