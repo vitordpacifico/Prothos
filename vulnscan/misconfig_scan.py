@@ -1,6 +1,8 @@
 import asyncio
 import json
+import random
 import re
+import string
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -22,30 +24,30 @@ SECURITY_HEADERS: list[tuple[str, str, str]] = [
     ("permissions-policy",           "Missing Permissions-Policy", "low"),
 ]
 
-EXPOSED_PATHS: list[tuple[str, str, str]] = [
-    ("/.git/config",            "Exposed .git repository", "high"),
-    ("/.git/HEAD",              "Exposed .git repository", "high"),
-    ("/.env",                   "Exposed .env file", "critical"),
-    ("/.env.local",             "Exposed .env.local", "critical"),
-    ("/config.json",            "Exposed config.json", "medium"),
-    ("/wp-config.php.bak",      "Exposed WP config backup", "critical"),
-    ("/.svn/entries",           "Exposed .svn", "high"),
-    ("/.DS_Store",              "Exposed .DS_Store", "low"),
-    ("/server-status",          "Apache server-status exposed", "medium"),
-    ("/server-info",            "Apache server-info exposed", "medium"),
-    ("/actuator",               "Spring Actuator exposed", "high"),
-    ("/actuator/env",           "Spring Actuator env exposed", "critical"),
-    ("/actuator/health",        "Spring Actuator health exposed", "low"),
-    ("/phpinfo.php",            "phpinfo() exposed", "high"),
-    ("/info.php",               "phpinfo() exposed", "high"),
-    ("/.well-known/security.txt","security.txt present", "info"),
-    ("/swagger-ui.html",        "Swagger UI exposed", "low"),
-    ("/api-docs",               "API docs exposed", "low"),
-    ("/.dockerenv",             "Docker env marker", "info"),
-    ("/backup.zip",             "Exposed backup archive", "high"),
-    ("/.aws/credentials",       "Exposed AWS credentials", "critical"),
-    ("/debug",                  "Debug endpoint", "medium"),
-    ("/trace",                  "Trace endpoint", "medium"),
+EXPOSED_PATHS: list[tuple[str, str, str, Optional[str]]] = [
+    ("/.git/config",            "Exposed .git repository", "high",     r"\[core\]|repositoryformatversion|\[remote"),
+    ("/.git/HEAD",              "Exposed .git repository", "high",     r"ref:\s*refs/|^[0-9a-f]{40}\b"),
+    ("/.env",                   "Exposed .env file", "critical",       r"(?m)^[A-Z][A-Z0-9_]{2,}="),
+    ("/.env.local",             "Exposed .env.local", "critical",      r"(?m)^[A-Z][A-Z0-9_]{2,}="),
+    ("/config.json",            "Exposed config.json", "medium",       None),
+    ("/wp-config.php.bak",      "Exposed WP config backup", "critical", r"DB_PASSWORD|DB_NAME|define\s*\("),
+    ("/.svn/entries",           "Exposed .svn", "high",                r"(?m)^\d+$|svn://|dir\b"),
+    ("/.DS_Store",              "Exposed .DS_Store", "low",            r"Bud1"),
+    ("/server-status",          "Apache server-status exposed", "medium", r"Apache Server Status|Server Version:"),
+    ("/server-info",            "Apache server-info exposed", "medium",   r"Apache Server Information|Server Settings"),
+    ("/actuator",               "Spring Actuator exposed", "high",     r"\"_links\"|\"self\""),
+    ("/actuator/env",           "Spring Actuator env exposed", "critical", r"\"propertySources\"|\"activeProfiles\""),
+    ("/actuator/health",        "Spring Actuator health exposed", "low",   r"\"status\"\s*:\s*\"(UP|DOWN|OUT_OF_SERVICE)\""),
+    ("/phpinfo.php",            "phpinfo() exposed", "high",           r"phpinfo\(\)|<title>phpinfo|PHP Version\s"),
+    ("/info.php",               "phpinfo() exposed", "high",           r"phpinfo\(\)|<title>phpinfo|PHP Version\s"),
+    ("/.well-known/security.txt","security.txt present", "info",      r"(?im)^(Contact|Policy|Expires|Encryption):"),
+    ("/swagger-ui.html",        "Swagger UI exposed", "low",           r"Swagger UI|swagger-ui"),
+    ("/api-docs",               "API docs exposed", "low",             r"\"swagger\"|\"openapi\"|\"paths\""),
+    ("/.dockerenv",             "Docker env marker", "info",           None),
+    ("/backup.zip",             "Exposed backup archive", "high",      None),
+    ("/.aws/credentials",       "Exposed AWS credentials", "critical", r"aws_access_key_id|\[default\]"),
+    ("/debug",                  "Debug endpoint", "medium",            None),
+    ("/trace",                  "Trace endpoint", "medium",            None),
 ]
 
 LISTING_RE = re.compile(r"<title>Index of /|Directory listing for|\[To Parent Directory\]", re.IGNORECASE)
@@ -124,22 +126,60 @@ async def _check_headers(client, target, report):
         _add(report, "Verbose error", target, "Stack trace / verbose error in response", "medium", r.status_code)
 
 
+def _is_html(body: str) -> bool:
+    low = body[:400].lower()
+    return "<!doctype html" in low or "<html" in low or "<app-root" in low or "<head" in low
+
+
+def _similar(a: str, b: str) -> bool:
+    la, lb = len(a), len(b)
+    if max(la, lb) == 0:
+        return True
+    return abs(la - lb) / max(la, lb) < 0.05
+
+
+async def _soft404_baseline(client, root) -> tuple[int, str]:
+    rand = "prothos-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+    try:
+        r = await client.get(urljoin(root, rand), timeout=10)
+        return r.status_code, r.text
+    except Exception:
+        return 0, ""
+
+
 async def _check_paths(client, root, sem, report):
-    async def _one(path, label, sev):
+    b_status, b_body = await _soft404_baseline(client, root)
+    soft404 = b_status in (200, 206)
+    if soft404:
+        console.print("[dim]    [i] catch-all baseline detected (soft-404) — using content signatures[/dim]")
+
+    async def _one(path, label, sev, sig):
         url = urljoin(root, path)
         async with sem:
             try:
                 r = await client.get(url, timeout=10)
             except Exception:
                 return
-            if r.status_code in (200, 206) and len(r.text) > 0:
-                low = r.text[:200].lower()
-                if "<html" in low and ("not found" in low or "404" in low):
+            if r.status_code not in (200, 206) or not r.text:
+                return
+            body = r.text
+
+            if sig:
+                if not re.search(sig, body[:20000], re.IGNORECASE):
                     return
-                _add(report, "Exposed resource", url, label, sev, r.status_code)
-                if LISTING_RE.search(r.text):
-                    _add(report, "Directory listing", url, "Directory listing enabled", "medium", r.status_code)
-    await asyncio.gather(*[_one(p, label, sev) for p, label, sev in EXPOSED_PATHS])
+            else:
+                if _is_html(body):
+                    return
+                if soft404 and _similar(body, b_body):
+                    return
+                if not soft404 and _similar(body, b_body):
+                    return
+
+            _add(report, "Exposed resource", url, label, sev, r.status_code)
+            if LISTING_RE.search(body):
+                _add(report, "Directory listing", url, "Directory listing enabled", "medium", r.status_code)
+
+    await asyncio.gather(*[_one(p, label, sev, sig) for p, label, sev, sig in EXPOSED_PATHS])
 
 
 async def _check_methods(client, target, report):
