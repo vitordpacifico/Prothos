@@ -10,6 +10,7 @@ venv/
 # Environment variables
 .env
 
-# Wordlists
+# Wordlists (never versioned)
+wordlist/
 microservices.txt
 endpoints.txt
