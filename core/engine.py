@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.panel import Panel
 from core.session import Session, init_session, get_session
 from core.output_manager import OutputManager, create_output_manager
+from core.ingest import ingest_report
 
 console = Console()
 
@@ -133,9 +134,12 @@ class Engine:
         self.output.print_module_start(step.name, self.target)
 
         try:
+            findings_before = len(self.session.findings)
             result = step.fn(self.session)
 
-            findings_before = len(self.session.findings)
+            # modules return their own Report — bridge it into the session
+            ingest_report(self.session, step.name, step.category, result)
+
             self.session.mark_done(step.name)
             findings_after  = len(self.session.findings)
             new_findings    = findings_after - findings_before
@@ -260,9 +264,72 @@ class Engine:
         except ImportError:
             pass
 
+    # vulnscan modules that operate on a URL with query params
+    VULNSCAN_URL = [
+        ("misconfig_scan",      "run_misconfig_scan"),
+        ("auth_bypass",         "run_auth_bypass"),
+        ("open_redirect_scan",  "run_open_redirect_scan"),
+        ("host_header_inject",  "run_host_header_inject"),
+        ("xss_scan",            "run_xss_scan"),
+        ("sqli_scan",           "run_sqli_scan"),
+        ("lfi_scan",            "run_lfi_scan"),
+        ("ssti_scan",           "run_ssti_scan"),
+        ("ssrf_scan",           "run_ssrf_scan"),
+        ("xxe_scan",            "run_xxe_scan"),
+        ("idor_scan",           "run_idor_scan"),
+        ("oauth_scan",          "run_oauth_scan"),
+        ("graphql_scan",        "run_graphql_scan"),
+        ("websocket_scan",      "run_websocket_scan"),
+        ("prototype_pollution", "run_prototype_pollution"),
+        ("cache_poisoning",     "run_cache_poisoning"),
+        ("request_smuggling",   "run_request_smuggling"),
+        ("race_condition",      "run_race_condition"),
+        ("business_logic",      "run_business_logic"),
+        ("cve_scanner",         "run_cve_scanner"),
+        ("subdomain_takeover",  "run_subdomain_takeover"),
+    ]
+
     def load_vulnscan(self):
-        pass
+        import importlib
+        for mod_name, fn_name in self.VULNSCAN_URL:
+            try:
+                mod = importlib.import_module(f"vulnscan.{mod_name}")
+                fn  = getattr(mod, fn_name, None)
+                if fn is None:
+                    continue
+                self.add_step(
+                    mod_name,
+                    (lambda f: lambda s: f(s.target, proxy=s.proxy))(fn),
+                    category="vulnscan",
+                    depends_on=["tech_fingerprint"],
+                )
+            except ImportError:
+                continue
+
+    def load_osint(self):
+        import importlib
+        from urllib.parse import urlparse
+        osint_domain = [
+            ("whois_lookup",      "run_whois_lookup"),
+            ("dns_recon",         "run_dns_recon"),
+            ("certificate_enum",  "run_certificate_enum"),
+            ("wayback_scraper",   "run_wayback_scraper"),
+        ]
+        for mod_name, fn_name in osint_domain:
+            try:
+                mod = importlib.import_module(f"recon.{mod_name}")
+                fn  = getattr(mod, fn_name, None)
+                if fn is None:
+                    continue
+                self.add_step(
+                    mod_name,
+                    (lambda f: lambda s: f(urlparse(s.target).netloc or s.target))(fn),
+                    category="osint",
+                )
+            except ImportError:
+                continue
 
     def load_all(self):
         self.load_recon()
+        self.load_osint()
         self.load_vulnscan()

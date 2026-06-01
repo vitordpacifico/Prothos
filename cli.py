@@ -28,14 +28,22 @@ DOMAIN_ARG = {
 }
 
 CATEGORY_LABEL = {
-    "recon":       "RECON",
-    "enumeration": "ENUMERATION",
-    "vulnscan":    "VULN SCAN",
-    "evasion":     "EVASION",
-    "postex":      "POST-EX",
+    "recon":        "RECON",
+    "enumeration":  "ENUMERATION",
+    "vulnscan":     "VULN SCAN",
+    "exploitation": "EXPLOITATION",
+    "evasion":      "EVASION",
+    "postex":       "POST-EX",
 }
 
-CATEGORY_ORDER = ["recon", "enumeration", "vulnscan", "evasion", "postex"]
+CATEGORY_ORDER = ["recon", "enumeration", "vulnscan", "exploitation", "evasion", "postex"]
+
+# modules that require an explicit consent gate (exploitation / live post-ex)
+GATED_EXPLOIT = {"sqli_exploit", "ssti_exploit", "cmdi_exploit", "lfi_exploit", "ssrf_exploit"}
+GATED_POSTEX  = {"privesc_enum", "loot_collector"}
+
+# lab mode disables the scope guard for owned/CTF targets (audit stays on)
+_LAB = False
 
 VALID_SEV = {"critical", "high", "medium", "low", "info"}
 
@@ -132,11 +140,37 @@ def _prompt_target(label: str = "[green]target >[/green] ") -> str:
         console.print("[red][!] Informe uma URL/host valido (ex: https://alvo.com)[/red]")
 
 
+def _consent(action: str) -> bool:
+    """Active-action gate. Lab mode auto-consents; otherwise require typed yes."""
+    if _LAB:
+        console.print(f"[dim]    [lab] {action} auto-consented (scope guard off)[/dim]")
+        return True
+    console.print(f"[bold yellow][!] {action} is an ACTIVE action against the target.[/bold yellow]")
+    console.print("[dim]    Only proceed on systems you are authorized to test (RoE).[/dim]")
+    return _prompt("[bold red]type 'yes' to authorize >[/bold red] ").lower() == "yes"
+
+
 def _run_module(info, target: str):
     primary = _hostname(target) if info.name in DOMAIN_ARG else target
-    console.print(f"\n[cyan][*] Running {info.category}/{info.name}[/cyan]")
-    report = _safe_call(info.fn, primary, proxy=get_session().proxy if get_session() else None)
     sess = _ensure_session(target)
+    extra = {}
+
+    if info.name in GATED_EXPLOIT:
+        if not _consent(f"exploitation/{info.name}"):
+            console.print("[yellow][!] Not authorized — skipping.[/yellow]")
+            return
+        param = _prompt("[green]param (blank=auto) >[/green] ").strip()
+        extra = {"allow_exploit": True, "lab": _LAB}
+        if param:
+            extra["param"] = param
+    elif info.name in GATED_POSTEX:
+        if not _consent(f"postex/{info.name}"):
+            console.print("[yellow][!] Not authorized — skipping.[/yellow]")
+            return
+        extra = {"allow_postex": True, "lab": _LAB}
+
+    console.print(f"\n[cyan][*] Running {info.category}/{info.name}[/cyan]")
+    report = _safe_call(info.fn, primary, proxy=sess.proxy, **extra)
     n = _ingest(sess, info.name, info.category, report)
     if n:
         console.print(f"[dim]    [+] {n} finding(s) added to session {sess.id}[/dim]")
@@ -408,13 +442,73 @@ def _menu_session():
             console.print(f"[red][!] Load failed: {e}[/red]")
 
 
+def _run_threat_model(target: str):
+    sess = _ensure_session(target)
+    if not sess.findings:
+        console.print("[yellow][!] No findings yet — run recon/vulnscan first.[/yellow]")
+        return
+    try:
+        from core.threat_model import run_threat_model
+        run_threat_model(sess)
+    except Exception as e:
+        console.print(f"[red][!] Threat model failed: {e}[/red]")
+
+
+def _menu_postengage():
+    console.print(Panel(
+        "[bold white][1][/bold white] Cleanup report (artifacts)   "
+        "[bold white][2][/bold white] Retest / session diff   [dim]0 back[/dim]",
+        title="[bold red]Post-Engagement[/bold red]", border_style="red", expand=False))
+    choice = _prompt("[green]post-eng >[/green] ")
+    if choice == "1":
+        from core.artifacts import run_cleanup_report
+        sess = get_session()
+        run_cleanup_report(session=sess.id if sess else "session")
+    elif choice == "2":
+        prev = _prompt("[green]previous session json >[/green] ").strip()
+        if not prev:
+            return
+        from core.retest import run_retest
+        result = run_retest(prev, get_session())
+        if _prompt("[green]write markdown report? [y/N] >[/green] ").lower() == "y":
+            from output.retest_report import run_retest_report
+            sess = get_session()
+            run_retest_report(result, "output/retest.md", target=sess.target if sess else "")
+
+
+def _scope_to_target(target: str):
+    """Scope the guard to the typed target's host so recon works, while still
+    fail-closing on anything outside it. Lab mode leaves the guard disabled."""
+    if _LAB:
+        return
+    from core.scope import init_guard
+    host = _hostname(target)
+    init_guard(scope=[host] if host else [], exclude=[], lab=False)
+
+
+def _toggle_lab():
+    global _LAB
+    _LAB = not _LAB
+    from core.roe import init_roe, lab_roe, RoE
+    if _LAB:
+        init_roe(lab_roe())
+        console.print("[bold yellow][lab] LAB MODE ON — scope guard disabled "
+                      "(use only on owned/CTF targets). Audit stays on.[/bold yellow]")
+    else:
+        init_roe(RoE())
+        console.print("[green][lab] Lab mode OFF — scope guard re-enabled (fail-closed).[/green]")
+
+
 def _main_menu(target):
     rows = [
-        ("1", "Scan Modules", "recon / enum / vulnscan / evasion / postex"),
+        ("1", "Scan Modules", "recon / enum / vulnscan / exploitation / postex"),
         ("2", "OOB / Confirm", "http / dns / interactsh listeners"),
         ("3", "Tools", "encoder"),
         ("4", "Output", "json / html / markdown / pdf / sarif / burp"),
         ("5", "Session", "show / save / load"),
+        ("6", "Threat Model", "prioritized attack plan from findings"),
+        ("7", "Post-Engagement", "cleanup report / retest diff"),
+        ("L", "Lab mode", f"scope guard {'OFF' if _LAB else 'ON'} (CTF/owned)"),
         ("T", "Set target", "trocar o alvo ativo"),
         ("0", "Exit", ""),
     ]
@@ -431,6 +525,9 @@ def _main_menu(target):
 
 def start_cli():
     show_banner()
+    from core.audit import init_audit
+    sess0 = get_session()
+    init_audit(sess0.id if sess0 else "session")
     loader = autodiscover()
     summary = loader.summary()
     console.print(f"[dim]    Loaded {summary['total']} modules: "
@@ -447,6 +544,7 @@ def start_cli():
         elif option == "1":
             target = target or _prompt_target()
             _ensure_session(target)
+            _scope_to_target(target)
             _menu_scan(loader, target)
         elif option == "2":
             _menu_oob()
@@ -456,9 +554,17 @@ def start_cli():
             _menu_output()
         elif option == "5":
             _menu_session()
+        elif option == "6":
+            target = target or _prompt_target()
+            _run_threat_model(target)
+        elif option == "7":
+            _menu_postengage()
+        elif option in ("l", "lab"):
+            _toggle_lab()
         elif option in ("t", "target"):
             target = _prompt_target()
             _ensure_session(target)
+            _scope_to_target(target)
         elif option == "":
             continue
         else:

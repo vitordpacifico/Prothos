@@ -10,6 +10,12 @@ venv/
 # Environment variables
 .env
 
-# Wordlists
+# Wordlists (never versioned)
+wordlist/
 microservices.txt
 endpoints.txt
+
+# Session artifacts (runtime, never versioned)
+output/audit-*.jsonl
+output/*.json
+output/retest.md

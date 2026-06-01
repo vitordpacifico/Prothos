@@ -99,9 +99,18 @@ class ModuleLoader:
         "evasion": {
             "encoder":               "run_encoder",
         },
+        "exploitation": {
+            "sqli_exploit":          "run_sqli_exploit",
+            "ssti_exploit":          "run_ssti_exploit",
+            "cmdi_exploit":          "run_cmdi_exploit",
+            "lfi_exploit":           "run_lfi_exploit",
+            "ssrf_exploit":          "run_ssrf_exploit",
+        },
         "postex": {
             "privilege_check":       "run_privilege_check",
+            "privesc_enum":          "run_privesc_enum",
             "credential_finder":     "run_credential_finder",
+            "loot_collector":        "run_loot_collector",
             "token_extractor":       "run_token_extractor",
             "session_hijack":        "run_session_hijack",
         },
