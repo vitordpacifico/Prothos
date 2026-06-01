@@ -19,12 +19,59 @@ Prothos is a modular offensive-security **assessment** framework for authorized 
 
 ## ▸ Scope & philosophy
 
-Prothos focuses on **finding, confirming, documenting and integrating** — the workflow that produces the deliverable in an authorized assessment.
+Prothos covers the engagement lifecycle: **pre-engagement → recon → threat modeling → assessment → exploitation → post-engagement → reporting**.
 
-- **Detection / confirmation / reporting is built in.**
-- **Active exploitation and post-breach operation are delegated** to vetted, auditable external tools through thin runner integrations (sqlmap, hydra, Metasploit). Prothos orchestrates them and ingests their results; it does not reimplement weaponization.
+- **Recon, detection, confirmation, threat modeling and reporting are built in.**
+- **Native exploitation** (sqli/ssti/cmdi/lfi/ssrf) is built in, behind hard safety rails.
+- **C2, persistence and lateral movement remain delegated** to vetted, auditable external tools (Metasploit, Sliver, etc.) through the runner integrations. Prothos orchestrates them and ingests their results; it does not reimplement post-breach operation or command-and-control.
+
+### Safety rails (always enforced for active actions)
+
+1. **Scope guard** — every request is checked against the engagement scope; out-of-scope traffic is blocked. (`core/scope.py`)
+2. **Rules of Engagement** — exploitation/post-ex require explicit consent (`allow_exploit` / `allow_postex`) or **lab mode**. (`core/roe.py`)
+3. **Audit trail** — every payload, exploit and planted artifact is logged append-only to `output/audit-<session>.jsonl`. Always on. (`core/audit.py`)
+
+`Lab mode` (CLI option `L`) disables the scope guard for owned/CTF targets only; the audit trail stays on.
 
 > Use only against systems you are explicitly authorized to test. See Disclaimer.
+
+---
+
+## ▸ Engagement phases
+
+| Phase | Coverage | Modules |
+|-------|----------|---------|
+| 1. Pre-engagement | ✅ rails | `core/scope`, `core/roe`, `core/audit` |
+| 2. Recon | ✅ | `recon/` (18) |
+| 3. Threat modeling | ✅ | `core/threat_model` — prioritized attack plan |
+| 4. Assessment | ✅ | `enumeration/` (8), `vulnscan/` (21) |
+| 5. Exploitation | ✅ native + delegated | `exploitation/` (5) + integration runners |
+| 6. Post-exploitation | 🟡 audit-oriented | `postex/` (privesc enum, loot, creds, tokens) |
+| 7. Reporting | ✅ | `output/` (json/html/md/pdf/sarif) |
+| 8. Post-engagement | ✅ | `core/artifacts` (cleanup), `core/retest` (diff) |
+
+### exploitation (5) — gated
+
+```
+sqli_exploit   ssti_exploit   cmdi_exploit   lfi_exploit   ssrf_exploit
+```
+
+Each acts on a **confirmed** finding and refuses to run without scope + consent
+(or lab mode). Example:
+
+```python
+from exploitation.sqli_exploit import run_sqli_exploit
+report = run_sqli_exploit("https://target/item?id=1", param="id",
+                          allow_exploit=True, save_json="output/sqli_exploit.json")
+```
+
+### Threat model & post-engagement
+
+```python
+from core.threat_model import run_threat_model   # prioritized attack plan
+from core.artifacts   import run_cleanup_report  # what to revert
+from core.retest      import run_retest          # diff vs. a previous session
+```
 
 ---
 
@@ -35,8 +82,9 @@ Prothos focuses on **finding, confirming, documenting and integrating** — the 
 | `recon` | 18 | fingerprint, endpoints, JS, subdomains (brute + passive), crawl, DNS, wayback, certs, favicon, whois, cloud, email, github, shodan, social |
 | `enumeration` | 8 | port scan, service detection, vhosts, parameter discovery, CORS, API versions, GraphQL, WebSocket |
 | `vulnscan` | 21 | detection scanners (see below) |
+| `exploitation` | 5 | native exploit modules — sqli, ssti, cmdi, lfi, ssrf (gated, see below) |
 | `evasion` | 1 | payload encoder (url/html/unicode/hex/base64/mixed) |
-| `postex` | 4 | credential finder, token extractor, privilege check, session security (audit-oriented) |
+| `postex` | 6 | privilege check/enum, credential finder, loot collector, token extractor, session security (audit-oriented) |
 | `fuzzing` | 2 | parameter fuzzer, HTTP method enumeration |
 
 ### vulnscan (21)
@@ -126,11 +174,14 @@ python main.py
 The CLI auto-discovers every implemented module by category and presents:
 
 ```
-  [1] Scan Modules        recon / enum / vulnscan / evasion / postex
+  [1] Scan Modules        recon / enum / vulnscan / exploitation / postex
   [2] OOB / Confirmation  http / dns / interactsh listeners
   [3] Tools               encoder
   [4] Output              json / html / markdown / pdf / sarif / burp
   [5] Session             show / save / load
+  [6] Threat Model        prioritized attack plan from findings
+  [7] Post-Engagement     cleanup report / retest diff
+  [L] Lab mode            scope guard off (owned/CTF only)
   [0] Exit
 ```
 
@@ -152,13 +203,15 @@ report = run_sqli_scan("https://target/path?id=1", proxy="http://127.0.0.1:8080"
 prothos/
 ├── main.py                     # entry point
 ├── cli.py                      # interactive CLI (dynamic module discovery)
-├── core/                       # session, engine, requester, analyzer, loader, ...
+├── core/                       # session, engine, requester, analyzer, loader,
+│                               #   scope, roe, audit, threat_model, artifacts, retest
 ├── recon/                      # 18 recon modules
 ├── enumeration/                # 8 enumeration modules
 ├── vulnscan/                   # 21 detection scanners
+├── exploitation/               # 5 native exploit modules (gated)
 ├── evasion/                    # encoder
-├── postex/                     # credential_finder, token_extractor,
-│                               #   privilege_check, session_hijack (audit)
+├── postex/                     # privesc_enum, loot_collector, credential_finder,
+│                               #   token_extractor, privilege_check (audit)
 ├── c2/                         # http_log, dns_log, interactsh_client (OOB)
 ├── fuzzing/                    # param_fuzzer, method_enum
 ├── integrations/               # burp, nuclei, sqlmap, hydra, metasploit, defectdojo
