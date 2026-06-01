@@ -153,6 +153,25 @@ class Requester:
         if not self._client:
             await self.start()
 
+        # --- scope guard (safety rail) --------------------------------------
+        try:
+            from core.scope import get_guard, ScopeViolation
+            from core import audit
+            try:
+                get_guard().assert_in_scope(url)
+            except ScopeViolation as sv:
+                audit.audit("scope_block", module="requester", target=url,
+                            result=str(sv), severity="info")
+                blocked = Response(
+                    url=url, status=0, text="", headers={},
+                    elapsed=0.0, method=method.upper(),
+                    error=f"scope: {sv}",
+                )
+                self.history.append(blocked)
+                return blocked
+        except ImportError:
+            pass
+
         max_retries = retries if retries is not None else self.retries
         last_error  = ""
 
